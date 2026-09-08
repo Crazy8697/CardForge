@@ -1,0 +1,17 @@
+{
+  "base": "C:\\Users\\Adam\\Pictures\\Barley\\card_base_dark50.png",
+  "body_font": "C:\\Windows\\Fonts\\georgia.ttf",
+  "title_font": "C:\\Windows\\Fonts\\georgiab.ttf",
+  "left": true,
+  "align": "top",
+  "title_max": 150,
+  "body_max": 95,
+  "gap": 1.5,
+  "spacing": 1.25,
+  "margin_pct": 8,
+  "top_pct": 8,
+  "bottom_pct": 92,
+  "gold_top": [252, 228, 150],
+  "gold_mid": [222, 178, 74],
+  "gold_bot": [150, 105, 28]
+}
