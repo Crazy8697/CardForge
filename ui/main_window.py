@@ -1,6 +1,8 @@
 """Card Forge main window: content | style | preview, bottom export bar."""
 import json
 import os
+import shutil
+import sys
 
 from PIL import Image
 from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, Signal, Slot, QObject
@@ -15,9 +17,25 @@ from engine.render import CardSpec, FontNotFound, render_card
 from ui.preview import FullPreview, PreviewPane
 from ui.settings import BASE_DIR_DEFAULT, StylePanel
 
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if getattr(sys, "frozen", False):
+    # installed build: user data lives in %APPDATA%\CardForge, and the
+    # bundled starter presets are seeded there on first run
+    APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")),
+                           "CardForge")
+    _BUNDLED_PRESETS = os.path.join(sys._MEIPASS, "presets")
+else:
+    APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    _BUNDLED_PRESETS = None
 CONFIG_PATH = os.path.join(APP_DIR, "config.json")
 PRESETS_DIR = os.path.join(APP_DIR, "presets")
+
+if _BUNDLED_PRESETS and not os.path.isdir(PRESETS_DIR):
+    os.makedirs(PRESETS_DIR, exist_ok=True)
+    if os.path.isdir(_BUNDLED_PRESETS):
+        for f in os.listdir(_BUNDLED_PRESETS):
+            if f.endswith(".json"):
+                shutil.copy2(os.path.join(_BUNDLED_PRESETS, f),
+                             os.path.join(PRESETS_DIR, f))
 
 LEGEND = ("## header · [] empty box · [x] checked box · blank line = paragraph "
           "break · **bold** · *italic* · ~~strike~~")
