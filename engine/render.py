@@ -351,10 +351,11 @@ def render_checklist(canvas, items, font, top, margin, W, spacing, gap, gold):
 
 def render_structured(canvas, body, fonts, bold_font, max_w, top, margin,
                       spacing, gold):
-    """Left-aligned body. Lines starting with '## ' are bold headers, '[] '
-    gets an empty box, '[x] ' a checked box, each with hanging indent. Blank
-    lines are paragraph breaks. Inline **bold**/*italic*/~~strike~~ works in
-    item and paragraph lines. Returns bottom y."""
+    """Left-aligned body. Lines starting with '## ' are bold headers, '- '
+    a bullet point, '[] ' an empty box, '[x] ' a checked box, each with
+    hanging indent. Blank lines are paragraph breaks. Inline
+    **bold**/*italic*/~~strike~~ works in item and paragraph lines.
+    Returns bottom y."""
     w, h = canvas.size
     size = fonts.size
     line_h = int(size * spacing)
@@ -371,6 +372,13 @@ def render_structured(canvas, body, fonts, bold_font, max_w, top, margin,
         if raw.startswith("## "):
             for ln in wrap(raw[3:], bold_font, max_w, md):
                 md.text((margin, y), ln, font=bold_font, fill=255)
+                y += line_h
+            continue
+        if raw.startswith("- "):
+            b_indent = int(md.textlength("• ", font=fonts.regular))
+            md.text((margin, y), "•", font=fonts.regular, fill=255)
+            for ln in wrap_styled(raw[2:], fonts, max_w - b_indent, md):
+                _draw_line(md, ln, margin + b_indent, y, fonts)
                 y += line_h
             continue
         if raw.startswith("[] ") or raw.startswith("[x] "):
@@ -412,6 +420,9 @@ def structured_height(body, fonts, bold_font, max_w, spacing, draw):
             y += line_h // 2
         elif raw.startswith("## "):
             y += line_h * len(wrap(raw[3:], bold_font, max_w, draw))
+        elif raw.startswith("- "):
+            b_indent = int(draw.textlength("• ", font=fonts.regular))
+            y += line_h * len(wrap_styled(raw[2:], fonts, max_w - b_indent, draw))
         elif raw.startswith("[] ") or raw.startswith("[x] "):
             text = raw[4:] if raw.startswith("[x] ") else raw[3:]
             y += line_h * len(wrap_styled(text, fonts, max_w - indent, draw))

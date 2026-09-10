@@ -37,8 +37,8 @@ if _BUNDLED_PRESETS and not os.path.isdir(PRESETS_DIR):
                 shutil.copy2(os.path.join(_BUNDLED_PRESETS, f),
                              os.path.join(PRESETS_DIR, f))
 
-LEGEND = ("## header · [] empty box · [x] checked box · blank line = paragraph "
-          "break · **bold** · *italic* · ~~strike~~")
+LEGEND = ("## header · - bullet · [] empty box · [x] checked box · blank line "
+          "= paragraph break · **bold** · *italic* · ~~strike~~")
 
 
 class RenderWorker(QObject):
@@ -85,6 +85,7 @@ class MainWindow(QWidget):
                 ("I", "Italicize selection (Ctrl+I)", lambda: self._wrap_sel("*")),
                 ("S̶", "Strike through selection", lambda: self._wrap_sel("~~")),
                 ("##", "Header line(s)", lambda: self._prefix_lines("## ")),
+                ("•", "Bullet line(s)", lambda: self._prefix_lines("- ")),
                 ("☐", "Empty checkbox line(s)", lambda: self._prefix_lines("[] ")),
                 ("☑", "Checked checkbox line(s)", lambda: self._prefix_lines("[x] "))):
             b = QPushButton(text)
@@ -294,7 +295,7 @@ class MainWindow(QWidget):
             if not l.strip():
                 out.append(l)
                 continue
-            for p in ("## ", "[] ", "[x] "):
+            for p in ("## ", "[] ", "[x] ", "- "):
                 if l.startswith(p):
                     l = l[len(p):]
                     break
