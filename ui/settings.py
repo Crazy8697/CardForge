@@ -13,7 +13,8 @@ from PySide6.QtWidgets import (QColorDialog, QComboBox, QDoubleSpinBox,
 from engine.render import (FONT_DEFAULT, GOLD_BOT, GOLD_MID, GOLD_TOP,
                            TITLE_FONT_DEFAULT)
 
-BASE_DIR_DEFAULT = r"C:\Users\Adam\Pictures\Barley"
+BASE_DIR_DEFAULT = r"C:\Users\Adam\Pictures\Barley"            # default output folder
+BASES_DIR_DEFAULT = r"C:\Users\Adam\Pictures\Barley\Masters"  # base plates live here
 FONTS_DIR = r"C:\Windows\Fonts"
 
 
@@ -123,7 +124,7 @@ class StylePanel(QWidget):
         bl = QHBoxLayout(base_box)
         self.base_combo = QComboBox()
         self.base_combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self._populate_bases(BASE_DIR_DEFAULT)
+        self._populate_bases(BASES_DIR_DEFAULT)
         btn_base = QPushButton("Browse…")
         btn_base.clicked.connect(self._browse_base)
         bl.addWidget(self.base_combo, 1)
@@ -275,7 +276,7 @@ class StylePanel(QWidget):
 
     def _browse_base(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose base plate",
-                                              BASE_DIR_DEFAULT, "PNG (*.png)")
+                                              BASES_DIR_DEFAULT, "PNG (*.png)")
         if path:
             self.set_base(path)
 
