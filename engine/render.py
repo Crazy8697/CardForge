@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-BASE_DEFAULT = r"C:\Users\Adam\Pictures\Barley\card_base_dark50.png"
+BASE_DEFAULT = r"C:\Users\Adam\Pictures\Barley\Masters\card_base_dark50.png"
 FONT_DEFAULT = r"C:\Windows\Fonts\georgia.ttf"
 TITLE_FONT_DEFAULT = r"C:\Windows\Fonts\georgiab.ttf"
 
@@ -57,6 +57,72 @@ class CardSpec:
     gold_top: tuple = field(default_factory=lambda: GOLD_TOP)
     gold_mid: tuple = field(default_factory=lambda: GOLD_MID)
     gold_bot: tuple = field(default_factory=lambda: GOLD_BOT)
+    # --- series styling (defaults reproduce the classic gold look exactly)
+    width: float = 0.0               # text block width, fraction of W; 0 = W - 2*margin
+    fill: tuple = None               # solid RGB fill; None = gold gradient
+    glow: bool = True                # warm glow behind centered body/title text
+    shadow_rgba: tuple = field(default_factory=lambda: SHADOW)
+    shadow_offset: int = 0           # px; 0 = auto (max(2, size // 22))
+    shadow_blur: float = 0.0         # px; 0 = auto (offset * 1.5)
+    font_weight: int = 0             # variable-font wght axis; 0 = file default
+    stroke: tuple = None             # outline RGB drawn under the fill; None = none
+    stroke_px: int = 0               # outline width in px
+    max_lines: int = 0               # auto-fit also shrinks until body wraps to <= this many lines
+
+
+@dataclass
+class Style:
+    """Letter treatment shared by body, title and checklist."""
+    fill: tuple = None
+    glow: bool = True
+    shadow_rgba: tuple = SHADOW
+    shadow_offset: int = 0
+    shadow_blur: float = 0.0
+    stroke: tuple = None
+    stroke_px: int = 0
+
+    @classmethod
+    def from_spec(cls, spec):
+        return cls(tuple(spec.fill) if spec.fill else None, spec.glow,
+                   tuple(spec.shadow_rgba), spec.shadow_offset, spec.shadow_blur,
+                   tuple(spec.stroke) if spec.stroke else None, spec.stroke_px)
+
+
+def _silhouette(mask, style):
+    """Letter mask grown by the outline width (what the shadow falls from)."""
+    if style.stroke and style.stroke_px > 0:
+        return mask.filter(ImageFilter.MaxFilter(2 * style.stroke_px + 1))
+    return mask
+
+
+def _drop_shadow(canvas, mask, size, style):
+    """Offset + blurred shadow under the (outlined) letters. Returns offset."""
+    w, h = canvas.size
+    off = style.shadow_offset or max(2, size // 22)
+    blur = style.shadow_blur or off * 1.5
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    shadow.paste(Image.new("RGBA", (w, h), style.shadow_rgba), (off, off),
+                 _silhouette(mask, style))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur))
+    canvas.alpha_composite(shadow)
+    return off
+
+
+def _outline(canvas, mask, style):
+    """Solid outline color through the grown mask; the fill covers its middle."""
+    if not (style.stroke and style.stroke_px > 0):
+        return
+    w, h = canvas.size
+    layer = Image.new("RGBA", (w, h), tuple(style.stroke) + (255,))
+    layer.putalpha(_silhouette(mask, style))
+    canvas.alpha_composite(layer)
+
+
+def _solid_fill(canvas, mask, style):
+    w, h = canvas.size
+    fill = Image.new("RGBA", (w, h), tuple(style.fill) + (255,))
+    fill.putalpha(mask)
+    canvas.alpha_composite(fill)
 
 
 @dataclass
@@ -65,13 +131,24 @@ class RenderResult:
     body_px: int
     line_count: int
     overflow: bool                   # body hit the size floor and still doesn't fit
+    block: tuple = None              # (x0, y0, x1, y1) of the rendered body block
 
 
-def load_font(path, size):
+def load_font(path, size, weight=0):
     try:
-        return ImageFont.truetype(path, size)
+        font = ImageFont.truetype(path, size)
     except OSError:
         raise FontNotFound(f"font not found: {path}")
+    if weight:
+        try:
+            axes = font.get_variation_axes()
+        except OSError:
+            axes = []          # static font: weight is whatever the file is
+        if axes:
+            font.set_variation_by_axes(
+                [weight if a["name"] in (b"Weight", "Weight", b"wght") else a["default"]
+                 for a in axes])
+    return font
 
 
 def _variant(path, suffix):
@@ -88,12 +165,12 @@ class FontSet:
     bold italic -> bold.
     """
 
-    def __init__(self, font_path, title_font_path, size):
+    def __init__(self, font_path, title_font_path, size, weight=0):
         self.size = size
-        self.regular = load_font(font_path, size)
+        self.regular = load_font(font_path, size, weight)
         bold_path = _variant(font_path, "b") or title_font_path
         self.bold = load_font(bold_path, size)
-        self.italic = load_font(_variant(font_path, "i") or font_path, size)
+        self.italic = load_font(_variant(font_path, "i") or font_path, size, weight)
         self.bold_italic = load_font(_variant(font_path, "z") or bold_path, size)
 
     def for_style(self, bold, italic):
@@ -238,19 +315,20 @@ def fit(text, font_path, max_w, max_h, start, floor, draw, spacing):
 
 
 def fit_styled(text, font_path, title_font_path, max_w, max_h, start, floor,
-               draw, spacing):
+               draw, spacing, weight=0, max_lines=0):
     """fit() with inline-markup awareness; identical to fit() on plain text."""
     size = start
     while size >= floor:
-        fonts = FontSet(font_path, title_font_path, size)
+        fonts = FontSet(font_path, title_font_path, size, weight)
         lines = wrap_styled(text, fonts, max_w, draw)
         line_h = int(size * spacing)
         total_h = line_h * len(lines)
         widest = max((_line_w(l, fonts, draw) for l in lines), default=0)
-        if total_h <= max_h and widest <= max_w:
+        if (total_h <= max_h and widest <= max_w
+                and (not max_lines or len(lines) <= max_lines)):
             return fonts, lines, line_h
         size -= 4
-    fonts = FontSet(font_path, title_font_path, floor)
+    fonts = FontSet(font_path, title_font_path, floor, weight)
     lines = wrap_styled(text, fonts, max_w, draw)
     return fonts, lines, int(floor * spacing)
 
@@ -271,9 +349,11 @@ def gold_gradient(w, h, gold=(GOLD_TOP, GOLD_MID, GOLD_BOT)):
     return col.resize((w, h), Image.NEAREST)
 
 
-def render_block(canvas, lines, font, line_h, top, center_x, gold, fonts=None):
+def render_block(canvas, lines, font, line_h, top, center_x, gold, fonts=None,
+                 style=None):
     """Draw lines centered on center_x starting at top, with shadow + gold
     gradient. Plain lines are strs; styled lines (lists) need fonts."""
+    style = style or Style()
     w, h = canvas.size
     mask = Image.new("L", (w, h), 0)
     md = ImageDraw.Draw(mask)
@@ -288,18 +368,19 @@ def render_block(canvas, lines, font, line_h, top, center_x, gold, fonts=None):
         y += line_h
 
     # shadow: offset, blurred
-    off = max(2, font.size // 22)
-    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    shadow_layer = Image.new("RGBA", (w, h), SHADOW)
-    shadow.paste(shadow_layer, (off, off), mask)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(off * 1.5))
-    canvas.alpha_composite(shadow)
+    off = _drop_shadow(canvas, mask, font.size, style)
 
     # soft warm glow behind letters
-    glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    glow.paste(Image.new("RGBA", (w, h), (255, 200, 90, 90)), (0, 0), mask)
-    glow = glow.filter(ImageFilter.GaussianBlur(off * 3))
-    canvas.alpha_composite(glow)
+    if style.glow:
+        glow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        glow.paste(Image.new("RGBA", (w, h), (255, 200, 90, 90)), (0, 0), mask)
+        glow = glow.filter(ImageFilter.GaussianBlur(off * 3))
+        canvas.alpha_composite(glow)
+
+    _outline(canvas, mask, style)
+    if style.fill:
+        _solid_fill(canvas, mask, style)
+        return y
 
     # gold fill, gradient runs per line
     fill = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -313,8 +394,10 @@ def render_block(canvas, lines, font, line_h, top, center_x, gold, fonts=None):
     return y
 
 
-def render_checklist(canvas, items, font, top, margin, W, spacing, gap, gold):
+def render_checklist(canvas, items, font, top, margin, W, spacing, gap, gold,
+                     style=None):
     """Two-column checklist, every box checked, gold styling."""
+    style = style or Style()
     size = font.size
     box = int(size * 0.85)
     line_h = int(size * spacing)
@@ -338,11 +421,11 @@ def render_checklist(canvas, items, font, top, margin, W, spacing, gap, gold):
                 fill=255, width=stroke + 2, joint="curve")
         md.text((x + box + int(size * 0.45), y), item, font=font, fill=255)
     # shadow + gold, same treatment as text
-    off = max(2, size // 22)
-    shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
-    shadow.paste(Image.new("RGBA", canvas.size, SHADOW), (off, off), mask)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(off * 1.5))
-    canvas.alpha_composite(shadow)
+    _drop_shadow(canvas, mask, size, style)
+    _outline(canvas, mask, style)
+    if style.fill:
+        _solid_fill(canvas, mask, style)
+        return top + rows * line_h
     fill = gold_gradient(canvas.size[0], canvas.size[1], gold).convert("RGBA")
     fill.putalpha(mask)
     canvas.alpha_composite(fill)
@@ -350,12 +433,13 @@ def render_checklist(canvas, items, font, top, margin, W, spacing, gap, gold):
 
 
 def render_structured(canvas, body, fonts, bold_font, max_w, top, margin,
-                      spacing, gold):
+                      spacing, gold, style=None):
     """Left-aligned body. Lines starting with '## ' are bold headers, '- '
     a bullet point, '[] ' an empty box, '[x] ' a checked box, each with
     hanging indent. Blank lines are paragraph breaks. Inline
     **bold**/*italic*/~~strike~~ works in item and paragraph lines.
     Returns bottom y."""
+    style = style or Style()
     w, h = canvas.size
     size = fonts.size
     line_h = int(size * spacing)
@@ -399,15 +483,36 @@ def render_structured(canvas, body, fonts, bold_font, max_w, top, margin,
         for ln in wrap_styled(raw, fonts, max_w, md):
             _draw_line(md, ln, margin, y, fonts)
             y += line_h
-    off = max(2, size // 22)
-    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    shadow.paste(Image.new("RGBA", (w, h), SHADOW), (off, off), mask)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(off * 1.5))
-    canvas.alpha_composite(shadow)
+    _drop_shadow(canvas, mask, size, style)
+    _outline(canvas, mask, style)
+    if style.fill:
+        _solid_fill(canvas, mask, style)
+        return y
     fill = gold_gradient(w, h, gold).convert("RGBA")
     fill.putalpha(mask)
     canvas.alpha_composite(fill)
     return y
+
+
+def structured_lines(body, fonts, bold_font, max_w, draw):
+    """Number of wrapped text lines in structured mode (paragraph gaps excluded)."""
+    size = fonts.size
+    indent = int(size * 0.8) + int(size * 0.45)
+    n = 0
+    for raw in body.split("\n"):
+        if not raw.strip():
+            continue
+        if raw.startswith("## "):
+            n += len(wrap(raw[3:], bold_font, max_w, draw))
+        elif raw.startswith("- "):
+            b_indent = int(draw.textlength("• ", font=fonts.regular))
+            n += len(wrap_styled(raw[2:], fonts, max_w - b_indent, draw))
+        elif raw.startswith("[] ") or raw.startswith("[x] "):
+            text = raw[4:] if raw.startswith("[x] ") else raw[3:]
+            n += len(wrap_styled(text, fonts, max_w - indent, draw))
+        else:
+            n += len(wrap_styled(raw, fonts, max_w, draw))
+    return n
 
 
 def structured_height(body, fonts, bold_font, max_w, spacing, draw):
@@ -438,9 +543,11 @@ def render_card(spec: CardSpec, base: Image.Image) -> RenderResult:
     canvas = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
     gold = (tuple(spec.gold_top), tuple(spec.gold_mid), tuple(spec.gold_bot))
+    style = Style.from_spec(spec)
+    weight = spec.font_weight
 
     margin = int(W * spec.margin)
-    max_w = W - 2 * margin
+    max_w = int(W * spec.width) if spec.width else W - 2 * margin
     region_top = int(H * spec.top)
     region_bot = int(H * spec.bottom)
     cx = W / 2
@@ -455,7 +562,8 @@ def render_card(spec: CardSpec, base: Image.Image) -> RenderResult:
         tmax = spec.title_size or int(W * 0.10)
         tfont, tlines, tlh = fit(spec.title, spec.title_font, max_w, int(H * 0.18),
                                  tmax, int(W * 0.05), draw, 1.1)
-        y_cursor = render_block(canvas, tlines, tfont, tlh, region_top, cx, gold)
+        y_cursor = render_block(canvas, tlines, tfont, tlh, region_top, cx, gold,
+                                style=style)
         y_cursor += int(tlh * spec.gap)
 
     items = [i.strip() for i in spec.checklist.split(";") if i.strip()] if spec.checklist else []
@@ -464,7 +572,7 @@ def render_card(spec: CardSpec, base: Image.Image) -> RenderResult:
     if items:
         col_w = max_w // 2
         while check_size > int(W * 0.02):
-            f = load_font(spec.font, check_size)
+            f = load_font(spec.font, check_size, weight)
             widest = max(draw.textlength(i, font=f) for i in items)
             if widest + check_size * 1.4 <= col_w:
                 break
@@ -476,23 +584,27 @@ def render_card(spec: CardSpec, base: Image.Image) -> RenderResult:
     if body and spec.left:
         size = max_size
         while size > min_size:
-            fonts = FontSet(spec.font, spec.title_font, size)
+            fonts = FontSet(spec.font, spec.title_font, size, weight)
             bfont = load_font(spec.title_font, size)
-            if structured_height(body, fonts, bfont, max_w, spec.spacing, draw) <= avail_h:
+            if (structured_height(body, fonts, bfont, max_w, spec.spacing, draw) <= avail_h
+                    and (not spec.max_lines or
+                         structured_lines(body, fonts, bfont, max_w, draw) <= spec.max_lines)):
                 break
             size -= 4
-        fonts = FontSet(spec.font, spec.title_font, size)
+        fonts = FontSet(spec.font, spec.title_font, size, weight)
         bfont = load_font(spec.title_font, size)
         overflow = structured_height(body, fonts, bfont, max_w,
                                      spec.spacing, draw) > avail_h
         font = fonts.regular
-        lines = body.split("\n")
+        lines = [None] * max(1, structured_lines(body, fonts, bfont, max_w, draw))
+        block_top = y_cursor
         y_cursor = render_structured(canvas, body, fonts, bfont, max_w,
-                                     y_cursor, margin, spec.spacing, gold)
+                                     y_cursor, margin, spec.spacing, gold, style)
+        block = (margin, block_top, margin + max_w, y_cursor)
     elif body:
         fonts, lines, line_h = fit_styled(body, spec.font, spec.title_font,
                                           max_w, avail_h, max_size, min_size,
-                                          draw, spec.spacing)
+                                          draw, spec.spacing, weight, spec.max_lines)
         font = fonts.regular
         block_h = line_h * len(lines)
         widest = max((_line_w(l, fonts, draw) for l in lines), default=0)
@@ -501,19 +613,22 @@ def render_card(spec: CardSpec, base: Image.Image) -> RenderResult:
             top = y_cursor + (avail_h - block_h) // 2
         else:
             top = y_cursor
-        y_cursor = render_block(canvas, lines, font, line_h, top, cx, gold, fonts)
+        y_cursor = render_block(canvas, lines, font, line_h, top, cx, gold, fonts,
+                                style)
+        block = (int(cx - widest / 2), top, int(cx + widest / 2), y_cursor)
     else:
-        font = load_font(spec.font, check_size)
+        font = load_font(spec.font, check_size, weight)
         lines = []
+        block = None
 
     if items:
-        cfont = load_font(spec.font, check_size)
+        cfont = load_font(spec.font, check_size, weight)
         y_cursor += int(check_size * 1.2)
         render_checklist(canvas, items, cfont, y_cursor, margin, W,
-                         spec.spacing, spec.gap, gold)
+                         spec.spacing, spec.gap, gold, style)
 
     out = Image.alpha_composite(base, canvas).convert("RGB")
-    return RenderResult(out, font.size, len(lines), overflow)
+    return RenderResult(out, font.size, len(lines), overflow, block)
 
 
 def render(spec: CardSpec, base: Image.Image) -> Image.Image:
